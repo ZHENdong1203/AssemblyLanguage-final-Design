@@ -1,0 +1,561 @@
+data segment
+mes0 db 0dh,0ah,'input coefficient of equation: -128<=a,b,c<=127:','$'
+mes1 db 0dh,0ah,'please input a=','$'
+mes2 db 0dh,0ah,'please input b=','$'
+mes3 db 0dh,0ah,'please input c=','$'
+mes4 db 0dh,0ah,'input data not in the range,please input again','$'
+mes5 db 0dh,0ah,'input q or Q to exit, or input othe key to continue...','$'
+mes6 db 0dh,0ah,'a=0 leads the equation is not illegal !','$'
+mes7 db 0dh,0ah,'the roots of the equation:','$'
+mes8 db 0dh,0ah,'please input digital !','$'
+crlf db 0dh,0ah,'$'  ;回车
+result_dis1 db 'x1=       '   ;解1缓存
+result_dis2 db 'x2=       '   ;解2缓存
+num_1 dw 3                    ;解1缓存长度
+num_2 dw 3                    ;解2缓存长度
+ess dw ?                      ;存数据段地址
+char_flag db 0
+over_flag db 0                ;输入数据溢出标志位
+a   db 0                      ;存系数
+b   db 0
+x   db 0
+buff1 db 5        ;输入数据字符缓存
+      db ?
+      db 10 dup(0)
+dat_H dw 0        ;转换为正数后的4ac的高16位
+dat_L dw 0        ;转换为正数后的4ac的低16位
+b2_H dw 0         ;b的平方的高16位赋初值0
+b2_L dw 0         ;b的平方的低16位赋初值0
+temp_H dw ?
+temp_L dw ?
+solve_H dw ?
+solve_L dw ?
+divid dw 10       ;存储常数
+two dw 2
+sqrt_solve dw ?   ;开平方的结果
+sqrt_flag db 0    ;待开平方的正负标志 1:正数，0:负数
+s1 dw ?           ;存储-10*b/2a
+s2 dw ?           ;存储sqrt(b*b-4ac)/2a
+s1_real dw ?
+s2_real dw ?
+s_temp dw ?
+data ends
+show macro addrs   ;09H DOS 功能调用宏定义
+       lea  dx,addrs
+       mov ah,09h
+       int 21h
+endm
+code segment
+assume ds:data,cs:code
+start:
+       mov ax,data
+       mov ds,ax
+       mov ess,ax      ;备份数据段地址
+solve_again:
+       show mes0       ;显示输入a，b，c的信息
+       call process_a_b_c       ;输入处理验证a，b，c的值
+       call process_sqrt        ;运行开方运算
+       call process_roots       ;处理根的结果,存入根显示缓冲区 result_dis1,result_dis2
+       call process_roots_dis   ;用红色字体块显示方程的根x1,x2       
+       show mes5                ;输入结束或继续符，无回显
+       mov ah,08h
+       int 21h
+       cmp al,'q'               ;结束判断，q或Q退出，否则清屏后继续运行下一个解方程
+       jz exit_dos
+       cmp al,'Q'
+       jz exit_dos
+       call process_clear_dis   ;重复解方程先清屏
+       jmp solve_again
+exit_dos:
+       mov ah,4ch
+       int 21h
+;//主程序//
+;//子程序//
+process_indata proc
+       lea dx,buff1
+       lea si,buff1
+       mov ah,0ah
+       int 21h
+       mov bx,dx                 ;将0aH功能所取得数据首地址备份
+       mov cl,[bx+1]             ;取输入数据串中字符个数
+       add si,2
+       mov al,[si]
+       cmp al,'-'
+       jz first_ok
+mylab0:
+       cmp al,'0'
+       jl char_not_ok
+       cmp al,'9'
+       ja char_not_ok
+first_ok:
+       inc si
+       mov al,[si]
+       loop mylab0
+       jmp data_good
+char_not_ok:
+       mov char_flag,1
+       jmp exit
+data_good:
+       lea dx,buff1
+       lea si,buff1
+       mov cl,[bx+1]          ;取输入数据串中字符个数
+       add si,2
+       mov al,[si]
+       xor ax,ax
+       xor bx,bx
+       xor dx,dx
+       mov al,[si]            ;取键盘输入的第一个字符
+       dec cl
+       cmp al,'-'
+       jz mylab2              ;输入负数调入mylab2
+       sub al,'0'
+mylab1:
+       cmp cl,0
+       jz exit
+       mov bl,10
+       mul bl
+       xor bx,bx
+       mov bl,[si+1]
+       sub bx,'0'             ;将输入的字符转换为数值
+       add ax,bx
+       inc si
+       dec cl
+       jmp mylab1
+mylab2:                       ;负数转换，先处理符号位以后的数据，再用NEG指令变换
+       mov al,[si+1]
+       sub al,'0'
+       dec cl
+mylab4:
+       cmp cl,0
+       jz mylab3
+       mov bl,10
+       mul bl
+       xor bx,bx
+       mov bl,[si+2]
+       sub bx,'0'
+       add ax,bx
+       inc si
+       dec cl
+       jmp mylab4
+mylab3:
+       neg ax
+exit:
+       ret
+process_indata endp
+process_check proc            ;数据检查子程序a，b，c（-128-127）
+       cmp ax,-128
+       jl data_over
+       cmp ax,127
+       jg data_over
+       mov over_flag,0
+       jmp finish
+data_over:
+       mov over_flag,1
+finish:
+       ret
+process_check endp
+process_a_b_c proc
+again_a:
+       show mes1
+       call process_indata    ;处理输入的a值
+       cmp char_flag,1
+       jnz not_char_a
+       show mes8
+       mov char_flag,0
+       jmp again_a
+not_char_a:
+       cmp al,0
+       jnz data_ok
+       show mes6
+       jmp again_a
+data_ok:
+       call process_check
+       mov bl,over_flag
+       cmp bl,1
+       jnz data_ok_a
+       show mes4
+       jmp again_a
+data_ok_a:
+       mov a,al
+again_b:
+       show mes2
+       call process_indata   ;处理输入的b值
+       cmp char_flag,1
+       jnz not_char_b
+       show mes8
+       mov char_flag,0
+       jmp again_b
+not_char_b:
+       call process_check
+       mov bl,over_flag
+       cmp bl,1
+       jnz data_ok_b
+       show mes4
+       jmp again_b
+data_ok_b:
+       mov b,al
+again_c:
+       show mes3
+       call process_indata    ;处理输入的c值 
+       cmp char_flag,1
+       jnz not_char_c
+       show mes8
+       mov char_flag,0
+       jmp again_c
+not_char_c:
+       call process_check
+       mov bl,over_flag
+       cmp bl,1
+       jnz data_ok_c
+       show mes4
+       jmp again_c
+data_ok_c:
+       mov x,al
+       ret
+process_a_b_c endp
+;/开方函数
+process_sqrt proc
+       mov al,b
+       imul al              ;求b的平方，用带符号的乘法
+       mov b2_L,ax          ;b的平方要用32位存储，防止数据溢出
+       mov ax,b2_H
+       xor b2_H,ax          ;b的平方高16位清零
+       mov al,a 
+       imul x               ;求a*c
+       mov bx,4             ;求4*a*c
+       imul bx              ;a,b,c为带符号的数，故所有乘法指令应该用带符号乘法
+       test dx,8000h        ;判断计算结果的正负，为保证b^2-4ac运算
+       jz step1
+       not ax               ;如果为负数，则转换为负数，取反+1，因为为32位所以不好用ENG指令
+       not dx
+       add ax,1
+       adc dx,0
+       mov dat_H,dx         ;dat_H,dat_L存储4ac
+       mov dat_L,ax
+       mov ax,b2_L          ;先低位后高位运算b^-4ac
+       add ax,dat_L         ;计算b^2-4ac,因为4ac为负数，已转换为正数，故用加法指令
+       mov dx,b2_H
+       adc dx,dat_H
+       mov sqrt_flag,1
+       jmp next
+step1:
+       mov dat_H,dx         ;dat_H,dat_L存储4ac
+       mov dat_L,ax
+       mov ax,b2_L          ;32位减法b^2-4ac
+       sub ax,dat_L
+       mov dx,b2_H
+       sbb dx,dat_H
+       mov sqrt_flag,1      ;b^2-4ac正负标志:1为正数，0为负数
+       jnc next             ;判断正负数
+       mov sqrt_flag,0
+       sub ax,1
+       sbb dx,0
+       not ax
+       not dx
+next:                       ;转换为100次循环加法
+       mov solve_H,dx       ;将结果保存
+       mov solve_L,ax
+       mov cx,99            ;计算(b^2-4ac)*100,将(b^2-4ac)连续加100次
+loop1:
+       add ax,solve_L
+       adc dx,solve_H
+       loop loop1
+       mov temp_H,dx
+       mov temp_L,ax
+       mov solve_H,dx       ;保存计算结果
+       mov solve_L,ax
+       xor cx,cx
+step2:                      ;迭代运算
+       inc cx               ;从1开始迭代，求开方
+       mov ax,cx
+       mul ax
+       sub ax,solve_L       ;求x*x并和b^2-4ac作差，并转换为正数
+       sbb dx,solve_H
+       jnc step3
+       sub ax,1
+       sbb dx,0
+       not ax
+       not dx
+step3:                      ;将此次作差结果和上次比较，如果大于上次结果，则上次结果为开方的值，否则，继续迭代
+       cmp dx,temp_H
+       ja last_step         ;dx>temp_H
+       jb step4             ;dx<temp_H
+       cmp ax,temp_L        ;dx=temp_H,ax>=temp_L
+       jae last_step
+step4:                      ;还没有找到开方的值，将此次结果保存，然后cx+1，继续迭代
+       mov temp_H,dx
+       mov temp_L,ax
+       jmp step2
+last_step:
+       dec cx
+       ret
+process_sqrt endp
+;//显示函数
+process_result1 proc
+       xor cx,cx
+get_num:
+       cwd                  ;除10取余，将各个数据拆分
+       div divid
+       add dx,'0'
+       push dx
+       inc cx
+       cmp ax,0
+       jnz get_num
+       mov ax,cx
+to_buff:
+       pop bx               ;存储拆分结果
+       inc si
+       add num_1,1
+       mov byte ptr [si],bl
+loop2:
+       loop to_buff
+       cmp ax,1             ;小数点处理部分
+       jz one_bit
+       mov bl,byte ptr [si]   ;计算结果大于1位，处理小数点
+       inc si
+       add num_1,1
+       mov byte ptr [si],bl
+       mov byte ptr [si-1],'.'
+       jmp solve_dis
+one_bit:
+       mov bl,[si]
+       inc si
+       inc si
+       mov byte ptr [si],bl
+       mov byte ptr [si-2],'0'
+       mov byte ptr [si-1],'.'
+       add num_1,2
+solve_dis:
+       ret
+process_result1 endp
+process_result2 proc
+       xor cx,cx
+get_num2:
+       cwd                 ;除10取余，将各个数据拆分
+       div divid
+       add dx,'0'
+       push dx
+       inc cx
+       cmp ax,0
+       jnz get_num2
+       mov ax,cx
+to_buff2:
+       pop bx             ;存储拆分结果
+       inc di
+       add num_2,1
+       mov byte ptr [di],bl
+loop2:
+       loop to_buff2
+       cmp ax,1           ;小数点处理部分
+       jz one_bit2
+       mov bl,byte ptr [di]    ;计算结果大于1位，处理小数点
+       inc di
+       add num_2,1
+       mov byte ptr [di],bl
+       mov byte ptr [di-1],'.'
+       jmp solve_dis2
+one_bit2:                 ;计算结果为1位，处理小数点
+       mov bl,[di]
+       inc di
+       inc di
+       mov byte ptr [di],bl
+       mov byte ptr [di-2],'0'
+       mov byte ptr [di-1],'.'
+       add num_2,2
+solve_dis2:
+       ret
+process_result2 endp
+process_roots proc
+       mov sqrt_solve,cx     ;将开方结果保存
+       xor ah,ah
+       mov al,b
+       mov bl,-10
+       imul bl               ;求-10*b
+       mov s_temp,ax
+       add ax,sqrt_solve
+       mov s1_real,ax
+       mov ax,s_temp
+       sub ax,sqrt_solve
+       mov s2_real,ax
+       mov ax,s_temp
+       cwd
+       push ax
+       xor bh,bh
+       mov al,a
+       cbw
+       mov bx,ax
+       pop ax
+       cwd
+       idiv bx               ;求-10b/a
+       xor dx,dx
+       cwd
+       idiv two
+       mov s1,ax
+       mov ax,sqrt_solve      ;求sqrt(b^2-4ac)/2a
+       cwd
+       xor bh,bh
+       mov bl,a
+       test bl,80h            ;求a的绝对值
+       jz next2
+       neg bl
+next2:
+       div bx
+       xor dx,dx
+       cwd
+       idiv two
+       mov s2,ax
+       lea si,result_dis1
+       add si,2
+       mov num_1,3
+       lea di,result_dis2
+       add di,2
+       mov num_2,3
+       cmp sqrt_flag,1
+       jz pos_number           ;开方为正数，则跳转
+       ;方程的第一个解
+       show mes7
+       mov bx,s1               ;-b/2a
+       test bx,8000h           ;判断-b/2a的正负
+       jz disp1
+       neg bx
+       inc si
+       mov byte ptr [si],'-'
+       add num_1,1
+disp1:
+       mov ax,bx 
+       call process_result1    ;-b/2a的值
+       inc si
+       add num_1,1
+       mov byte ptr [si],'+'
+       mov ax,s2
+disp2:
+       call process_result1    ;sqrt(b^2-4ac)/2a的值
+       inc si
+       add num_1,1
+       mov byte ptr [si],'i'
+       ;方程第二个解
+       mov bx,s1
+       test bx,8000h           ;判断-b/2a的正负
+       jz disp3
+       neg bx
+       inc di
+       add num_2,1
+       mov byte ptr [di],'-'
+disp3:
+       mov ax,bx
+       call process_result2
+       inc di
+       add num_2,1
+       mov byte ptr [di],'-'
+       mov ax,s2
+disp4:
+       call process_result2      ;显示存出结果的虚数部分
+       inc di
+       add num_2,1
+       mov byte ptr [di],'i'
+       jmp exit_p
+pos_number:
+       ;计算结果为实数，方程第一个实数解
+       show mes7
+       mov ax,s1_real
+       push ax
+       mov al,a
+       xor ah,ah
+       cbw
+       mov bx,ax
+       pop ax
+       cwd
+       idiv bx
+       xor dx,dx
+       cwd
+       idiv two
+       mov bx,ax
+       test bx,8000h             ;判断方程解的正负
+       jz disp5
+       neg bx
+       inc si
+       add num_1,1
+       mov byte ptr [si],'-'
+disp5:
+       mov ax,bx
+       call process_result1     ;计算方程的第二个解
+       mov ax,s2_real
+       push ax
+       mov al,a
+       xor ah,ah
+       cbw
+       mov bx,ax
+       pop ax
+       cwd
+       idiv bx
+       xor dx,dx
+       cwd
+       idiv two
+       mov bx,ax
+       test bx,8000h             ;判断方程解的正负
+       jz disp6
+       neg bx
+       inc di
+       add num_2,1
+       mov byte ptr [di],'-'
+disp6:
+       mov ax,bx
+       call process_result2      ;方程的第二个实数解 
+exit_p:
+       ret
+process_roots endp
+process_clear_dis proc          ;清除屏幕
+       mov ah,6                 ;清屏
+       mov al,0                 ;空白屏幕的代码
+       mov cx,0                 ;左上角行列
+       mov dh,24                ;右下角行列
+       mov dl,79
+       mov bh,7                 ;空白行属性
+       int 10h
+       mov ah,2                 ;光标定位在窗口左下角
+       mov dh,0                 ;行号
+       mov dl,0                 ;列号
+       mov bh,0                 ;当前页号
+       int 10h
+       ret
+process_clear_dis endp
+process_roots_dis proc          ;用红色字体显示方程的解
+       show crlf                ;显示换行
+       mov es,ess
+       mov ah,03h
+       int 10h
+       mov ah,02h
+       mov bh,1
+       int 10h                  ;取光标地址
+       lea bx,result_dis1       ;显示解1
+       mov bp,bx
+       xor bx,bx
+       inc dl                   ;显示向前推一列
+       mov cx,num_1
+       mov al,01h
+       mov bl,24h
+       mov ah,13h
+       int 10h
+       show crlf                ;显示换行
+       mov es,ess
+       mov ah,03h
+       int 10h
+       mov ah,02h
+       mov bh,1
+       int 10h                  ;取光标地址
+       lea bx,result_dis2       ;显示解2
+       inc dl                   ;显示向前推一列
+       mov bp,bx
+       xor bx,bx
+       mov cx,num_2
+       mov al,01h
+       mov bl,24h
+       mov ah,13h
+       int 10h
+       ret
+process_roots_dis endp
+       code ends
+            end start
+       
+       
+       
